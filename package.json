@@ -1,0 +1,12 @@
+{
+  "name": "duty-schedule-website",
+  "version": "1.0.0",
+  "description": "A simple duty schedule website.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

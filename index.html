@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图书馆值班管理系统</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- 页面头部 -->
+    <header class="header">
+        <div class="header-content">
+            <h1 class="site-title">📚 图书馆值班管理系统</h1>
+            <div class="header-actions">
+                <button id="admin-mode" class="admin-btn">管理员模式</button>
+                <button id="calendar-btn" class="calendar-btn">📅 查看月历</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要内容区域 -->
+    <main class="main-content">
+        <section class="date-display">
+            <h2 id="current-date" class="current-date">2024年6月1日 星期六</h2>
+        </section>
+
+        <!-- 值班信息方块容器 -->
+        <section class="blocks-section">
+            <h3 class="section-title">今日值班安排</h3>
+            <div id="blocks-container" class="blocks-container">
+                <!-- 值班信息将由 JavaScript 动态加载 -->
+            </div>
+        </section>
+
+        <!-- 日期导航 -->
+        <section class="date-navigation">
+            <button id="prev-day" class="nav-btn">← 前一天</button>
+            <button id="today" class="nav-btn today-btn">今天</button>
+            <button id="next-day" class="nav-btn">后一天 →</button>
+        </section>
+    </main>
+
+    <!-- 交换模态框 -->
+    <div id="swap-modal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🔄 交换值班安排</h3>
+                <button class="close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="swap-info">
+                    <p>请选择要交换的日期和目标人员：</p>
+                    <div class="selected-slot">
+                        <strong>当前选择：</strong>
+                        <span id="selected-floor">二层</span> - 
+                        <span id="selected-time">09:00-11:00</span> - 
+                        <span id="selected-name">吴冰洁</span>
+                    </div>
+                </div>
+                
+                <div class="swap-options">
+                    <label for="target-date">目标日期：</label>
+                    <input type="date" id="target-date" class="date-input">
+                    
+                    <label for="target-floor">目标楼层：</label>
+                    <select id="target-floor" class="floor-select">
+                        <option value="二层">二层</option>
+                        <option value="三层">三层</option>
+                        <option value="四层">四层</option>
+                    </select>
+                    
+                    <label for="target-slot">目标时段：</label>
+                    <select id="target-slot" class="slot-select">
+                        <option value="1">时段1</option>
+                        <option value="2">时段2</option>
+                    </select>
+                </div>
+                
+                <div class="modal-actions">
+                    <button id="confirm-swap" class="confirm-btn">确认交换</button>
+                    <button id="cancel-swap" class="cancel-btn">取消</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 管理员登录模态框 -->
+    <div id="admin-modal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🔐 管理员登录</h3>
+                <button class="close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="login-form">
+                    <label for="admin-password">管理员密码：</label>
+                    <input type="password" id="admin-password" class="password-input">
+                    <button id="login-btn" class="login-btn">登录</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 日历模态框 -->
+    <div id="calendar-modal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📅 月历</h3>
+                <button class="close">&times;</button>
+            </div>
+            <div class="modal-body calendar-body">
+                <div class="calendar-navigation">
+                    <button id="prev-month" class="nav-btn">上月</button>
+                    <h4 id="current-month-display"></h4>
+                    <button id="next-month" class="nav-btn">下月</button>
+                </div>
+                <div class="calendar-grid-header">
+                    <div>日</div>
+                    <div>一</div>
+                    <div>二</div>
+                    <div>三</div>
+                    <div>四</div>
+                    <div>五</div>
+                    <div>六</div>
+                </div>
+                <div id="calendar-grid" class="calendar-grid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载指示器 -->
+    <div id="loading" class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <p>加载中...</p>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
