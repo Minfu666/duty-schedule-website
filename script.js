@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 加载JSON数据
     async function loadScheduleData() {
         try {
-            const response = await fetch('data/schedule.json');
+            const response = await fetch(`data/schedule.json?_t=${new Date().getTime()}`);
             if (!response.ok) {
                 throw new Error(`HTTP错误! 状态: ${response.status}`);
             }

@@ -169,4 +169,4 @@ def parse_excel_correctly(excel_file, output_json):
 
 # 使用示例
 if __name__ == "__main__":
-    parse_excel_correctly('9.01-9.07巡馆.xlsx', 'data/schedule.json')
+    parse_excel_correctly('9.15-9.30.xlsx', 'data/schedule.json')
