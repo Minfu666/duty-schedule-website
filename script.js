@@ -8,22 +8,96 @@ document.addEventListener('DOMContentLoaded', function() {
     let loginAttempts = 0;
     let lockoutUntil = null;
     let changeLogsCache = [];
-    let apiAvailable = false;
 
-    const apiBaseUrl = String((CONFIG.API && CONFIG.API.BASE_URL) || '')
+    const supabaseUrl = String((CONFIG.SUPABASE && CONFIG.SUPABASE.URL) || '')
         .trim()
         .replace(/\/+$/, '');
-    const API_ENDPOINTS = {
-        schedule: '/api/schedule',
-        changeLogs: '/api/change-logs'
-    };
+    const supabaseAnonKey = String((CONFIG.SUPABASE && CONFIG.SUPABASE.ANON_KEY) || '').trim();
     const STORAGE_KEYS = {
         schedule: 'scheduleData',
         changeLogs: 'changeLogs'
     };
 
-    function buildApiUrl(pathname) {
-        return apiBaseUrl ? `${apiBaseUrl}${pathname}` : pathname;
+    function isSupabaseConfigured() {
+        return Boolean(supabaseUrl && supabaseAnonKey);
+    }
+
+    function buildSupabaseUrl(resource, params = null) {
+        if (!isSupabaseConfigured()) {
+            throw new Error('Supabase 未配置');
+        }
+        const base = `${supabaseUrl}/rest/v1/${resource}`;
+        if (!params) {
+            return base;
+        }
+        return `${base}?${params.toString()}`;
+    }
+
+    function getSupabaseHeaders(extra = {}) {
+        return {
+            apikey: supabaseAnonKey,
+            Authorization: `Bearer ${supabaseAnonKey}`,
+            'Content-Type': 'application/json',
+            ...extra
+        };
+    }
+
+    function scheduleMapToRows(scheduleMap) {
+        const rows = [];
+        for (const [date, entries] of Object.entries(scheduleMap || {})) {
+            (entries || []).forEach(entry => {
+                rows.push({
+                    date,
+                    floor: entry.floor,
+                    slot: entry.slot,
+                    time: entry.time,
+                    name: entry.name
+                });
+            });
+        }
+        return rows;
+    }
+
+    function scheduleRowsToMap(rows) {
+        const out = {};
+        (rows || []).forEach(row => {
+            if (!out[row.date]) {
+                out[row.date] = [];
+            }
+            out[row.date].push({
+                floor: row.floor,
+                slot: row.slot,
+                time: row.time,
+                name: row.name
+            });
+        });
+        return out;
+    }
+
+    async function replaceSupabaseSchedule(scheduleMap) {
+        const deleteParams = new URLSearchParams();
+        deleteParams.set('date', 'not.is.null');
+        const deleteResp = await fetch(buildSupabaseUrl('schedule_entries', deleteParams), {
+            method: 'DELETE',
+            headers: getSupabaseHeaders({ Prefer: 'return=minimal' })
+        });
+        if (!deleteResp.ok) {
+            throw new Error(`清空 schedule_entries 失败: HTTP ${deleteResp.status}`);
+        }
+
+        const rows = scheduleMapToRows(scheduleMap);
+        if (rows.length === 0) {
+            return;
+        }
+
+        const insertResp = await fetch(buildSupabaseUrl('schedule_entries'), {
+            method: 'POST',
+            headers: getSupabaseHeaders({ Prefer: 'return=minimal' }),
+            body: JSON.stringify(rows)
+        });
+        if (!insertResp.ok) {
+            throw new Error(`写入 schedule_entries 失败: HTTP ${insertResp.status}`);
+        }
     }
 
     function getTodayDateStr() {
@@ -83,24 +157,15 @@ document.addEventListener('DOMContentLoaded', function() {
         return CONFIG.ADMIN.DEFAULT_PASSWORD;
     };
 
-    // 保存排班数据到后端
+    // 保存排班数据到 Supabase
     async function saveScheduleData() {
         const normalized = processScheduleData(scheduleData);
-        if (apiAvailable) {
+        if (isSupabaseConfigured()) {
             try {
-                const response = await fetch(buildApiUrl(API_ENDPOINTS.schedule), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ schedule: normalized })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`保存排班失败: HTTP ${response.status}`);
-                }
+                await replaceSupabaseSchedule(normalized);
             } catch (error) {
-                console.warn('后端保存失败，降级为本地保存:', error);
-                apiAvailable = false;
-                showToast('后端不可用，已切换为本地保存模式', 'warning');
+                console.warn('Supabase 保存失败，降级为本地保存:', error);
+                showToast('Supabase 不可用，已切换为本地保存模式', 'warning');
             }
         }
 
@@ -112,6 +177,9 @@ document.addEventListener('DOMContentLoaded', function() {
     async function initApp() {
         showLoading();
         try {
+            if (window.location.hostname.endsWith('github.io') && !isSupabaseConfigured()) {
+                console.warn('GitHub Pages 场景未配置 Supabase URL / ANON_KEY。');
+            }
             await loadScheduleData();
             setupEventListeners();
             loadDateData(currentDate);
@@ -124,30 +192,23 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    async function loadFromApi() {
-        const response = await fetch(`${buildApiUrl(API_ENDPOINTS.schedule)}?_t=${Date.now()}`);
-        if (!response.ok) {
-            throw new Error(`HTTP错误! 状态: ${response.status}`);
+    async function loadFromSupabase() {
+        if (!isSupabaseConfigured()) {
+            throw new Error('Supabase 未配置');
         }
-        const payload = await response.json();
-        const data = payload && payload.schedule ? payload.schedule : payload;
-        apiAvailable = true;
-        return data;
-    }
 
-    async function loadFromStaticJson() {
-        const response = await fetch(`data/schedule.json?_t=${Date.now()}`);
+        const params = new URLSearchParams();
+        params.set('select', 'date,floor,slot,time,name');
+        params.set('order', 'date.asc,floor.asc,slot.asc');
+        const response = await fetch(buildSupabaseUrl('schedule_entries', params), {
+            method: 'GET',
+            headers: getSupabaseHeaders()
+        });
         if (!response.ok) {
-            throw new Error(`静态数据HTTP错误! 状态: ${response.status}`);
+            throw new Error(`Supabase 读取失败: HTTP ${response.status}`);
         }
-        return await response.json();
-    }
-
-    function loadFromEmbeddedData() {
-        if (window.__SCHEDULE_DATA__ && typeof window.__SCHEDULE_DATA__ === 'object') {
-            return window.__SCHEDULE_DATA__;
-        }
-        throw new Error('内嵌数据不存在');
+        const rows = await response.json();
+        return scheduleRowsToMap(rows);
     }
 
     function loadFromLocalStorage() {
@@ -158,32 +219,13 @@ document.addEventListener('DOMContentLoaded', function() {
         return JSON.parse(raw);
     }
 
-    // 加载排班数据（API -> 静态JSON -> 内嵌JS -> localStorage）
+    // 加载排班数据（Supabase -> localStorage）
     async function loadScheduleData() {
         let data = null;
         try {
-            data = await loadFromApi();
-        } catch (apiError) {
-            apiAvailable = false;
-            console.warn('API加载失败，尝试静态方式加载:', apiError);
-        }
-
-        if (!data) {
-            try {
-                data = await loadFromStaticJson();
-                console.log('已从静态JSON加载数据');
-            } catch (staticError) {
-                console.warn('静态JSON加载失败，尝试内嵌数据:', staticError);
-            }
-        }
-
-        if (!data) {
-            try {
-                data = loadFromEmbeddedData();
-                console.log('已从内嵌数据加载数据');
-            } catch (embeddedError) {
-                console.warn('内嵌数据加载失败，尝试本地缓存:', embeddedError);
-            }
+            data = await loadFromSupabase();
+        } catch (supabaseError) {
+            console.warn('Supabase 加载失败，尝试本地缓存:', supabaseError);
         }
 
         if (!data) {
@@ -196,8 +238,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (!data) {
-            showToast('数据加载失败：API和本地数据均不可用', 'error');
-            throw new Error('无法加载排班数据');
+            scheduleData = {};
+            currentDate = getTodayDateStr();
+            console.warn('Supabase 和本地缓存均不可用，进入空数据模式');
+            showToast('暂无排班数据，请先配置 Supabase 或上传当月文件', 'warning');
+            return;
         }
 
         try {
@@ -664,8 +709,9 @@ document.addEventListener('DOMContentLoaded', function() {
         calendarGrid.addEventListener('click', function(event) {
             if (event.target.classList.contains('calendar-day') && !event.target.classList.contains('empty')) {
                 const selectedDate = event.target.dataset.date;
-                updateDateDisplay(selectedDate);
-                loadDateData(selectedDate);
+                currentDate = selectedDate;
+                updateDateDisplay(currentDate);
+                loadDateData(currentDate);
                 calendarModal.style.display = 'none';
                 document.body.style.overflow = '';
             }
@@ -692,7 +738,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const day = document.createElement('div');
                 day.classList.add('calendar-day');
                 const fullDate = new Date(date.getFullYear(), date.getMonth(), i);
-                const formattedDate = fullDate.toISOString().split('T')[0];
+                const formattedDate = formatDateToYMD(fullDate);
                 day.dataset.date = formattedDate;
                 day.textContent = i;
 
@@ -963,86 +1009,6 @@ document.addEventListener('DOMContentLoaded', function() {
         currentSelectedSlot = null;
     }
 
-    // 执行交换操作
-    async function performSwap(sourceDate, sourceFloor, sourceSlot, targetDate, targetFloor, targetSlot) {
-        showLoading();
-        
-        try {
-            // 获取源数据和目标数据
-            const sourceData = getSlotData(sourceDate, sourceFloor, sourceSlot);
-            const targetData = getSlotData(targetDate, targetFloor, targetSlot);
-            
-            if (!sourceData) {
-                throw new Error(`源数据不存在: ${sourceDate} ${sourceFloor} 时段${sourceSlot}`);
-            }
-
-            // 交换数据
-            setSlotData(sourceDate, sourceFloor, sourceSlot, targetData || { time: '--:--', name: '暂无' });
-            
-            if (targetData) {
-                setSlotData(targetDate, targetFloor, targetSlot, sourceData);
-            } else {
-                // 如果目标数据不存在，只设置源数据到目标位置
-                setSlotData(targetDate, targetFloor, targetSlot, sourceData);
-                // 清空源位置
-                setSlotData(sourceDate, sourceFloor, sourceSlot, { time: '--:--', name: '暂无' });
-            }
-
-            // 更新显示
-            if (sourceDate === currentDate) {
-                updateFloorDisplay(sourceFloor);
-            }
-            if (targetDate === currentDate) {
-                updateFloorDisplay(targetFloor);
-            }
-
-            showToast('交换成功完成！');
-            
-            // 模拟保存到服务器（实际使用时需要实现）
-            await simulateSaveToServer();
-            
-        } catch (error) {
-            throw error;
-        } finally {
-            hideLoading();
-        }
-    }
-
-    // 获取特定时间段数据
-    function getSlotData(date, floor, slot) {
-        const dayData = scheduleData[date];
-        if (!dayData) return null;
-        
-        return dayData.find(item => 
-            item.floor === floor && 
-            item.slot === parseInt(slot)
-        );
-    }
-
-    // 设置特定时间段数据
-    function setSlotData(date, floor, slot, data) {
-        if (!scheduleData[date]) {
-            scheduleData[date] = [];
-        }
-        
-        const index = scheduleData[date].findIndex(item => 
-            item.floor === floor && 
-            item.slot === parseInt(slot)
-        );
-        
-        const newData = { 
-            ...data, 
-            floor: floor, 
-            slot: parseInt(slot) 
-        };
-        
-        if (index !== -1) {
-            scheduleData[date][index] = newData;
-        } else {
-            scheduleData[date].push(newData);
-        }
-    }
-
     // 加载指定日期的数据并更新UI
     function loadDateData(date) {
         const todaySchedule = scheduleData[date];
@@ -1151,73 +1117,6 @@ document.addEventListener('DOMContentLoaded', function() {
             weekday: 'long' 
         };
         return date.toLocaleDateString('zh-CN', options);
-    }
-
-    // 渲染日历
-    function renderCalendar() {
-        const calendarDiv = document.getElementById('calendar');
-        const today = new Date();
-        const year = today.getFullYear();
-        const month = today.getMonth();
-        
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const daysInMonth = lastDay.getDate();
-        
-        let html = `
-            <div class="calendar-header">
-                <h3>${year}年${month + 1}月</h3>
-            </div>
-            <div class="calendar-grid-header">
-                <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
-            </div>
-            <div class="calendar-days">
-        `;
-
-        // 添加空白格子
-        for (let i = 0; i < firstDay.getDay(); i++) {
-            html += '<div class="calendar-day empty"></div>';
-        }
-
-        // 添加日期格子
-        for (let day = 1; day <= daysInMonth; day++) {
-            const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            const hasData = scheduleData[dateStr];
-            const isToday = dateStr === new Date().toISOString().split('T')[0];
-            const isCurrent = dateStr === currentDate;
-            
-            let dayClass = 'calendar-day';
-            if (isToday) dayClass += ' today';
-            if (isCurrent) dayClass += ' current';
-            if (hasData) dayClass += ' has-data';
-            
-            html += `<div class="${dayClass}" data-date="${dateStr}">${day}</div>`;
-        }
-
-        html += '</div>';
-        calendarDiv.innerHTML = html;
-
-        // 添加日期点击事件
-        calendarDiv.querySelectorAll('.calendar-day:not(.empty)').forEach(day => {
-            day.addEventListener('click', function() {
-                const date = this.getAttribute('data-date');
-                loadDateData(date);
-                
-                const modal = document.getElementById('calendar-modal');
-                modal.style.display = 'none';
-                document.body.style.overflow = '';
-            });
-        });
-    }
-
-    // 模拟保存到服务器
-    async function simulateSaveToServer() {
-        return new Promise((resolve) => {
-            setTimeout(() => {
-                console.log('数据已保存（模拟）', scheduleData);
-                resolve();
-            }, 500);
-        });
     }
 
     // 显示加载指示器
@@ -1347,35 +1246,33 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('clear-all-log').addEventListener('click', clearAllChangeLog);
     }
 
-    // 记录更换日志（写入后端）
+    // 记录更换日志（写入 Supabase）
     async function recordChangeLog(type, sourceData, targetData) {
         const changeLog = {
-            id: Date.now().toString(),
             type: type, // 'swap', 'move', 'edit'
             timestamp: new Date().toISOString(),
             source: sourceData,
             target: targetData
         };
 
-        if (apiAvailable) {
+        if (isSupabaseConfigured()) {
             try {
-                const response = await fetch(buildApiUrl(API_ENDPOINTS.changeLogs), {
+                const response = await fetch(buildSupabaseUrl('change_logs'), {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ log: changeLog })
+                    headers: getSupabaseHeaders({ Prefer: 'return=minimal' }),
+                    body: JSON.stringify([changeLog])
                 });
 
                 if (!response.ok) {
-                    throw new Error(`记录更换日志失败: HTTP ${response.status}`);
+                    throw new Error(`Supabase 记录更换日志失败: HTTP ${response.status}`);
                 }
 
                 if (CONFIG.DEVELOPMENT.DEBUG) {
-                    console.log('记录更换日志(后端):', changeLog);
+                    console.log('记录更换日志(Supabase):', changeLog);
                 }
                 return;
             } catch (error) {
-                console.warn('后端日志写入失败，降级本地日志:', error);
-                apiAvailable = false;
+                console.warn('Supabase 日志写入失败，降级本地日志:', error);
             }
         }
 
@@ -1393,7 +1290,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 加载更换日志
     async function loadChangeLog() {
-        if (!apiAvailable) {
+        if (!isSupabaseConfigured()) {
             changeLogsCache = JSON.parse(localStorage.getItem(STORAGE_KEYS.changeLogs) || '[]');
             displayChangeLog(changeLogsCache);
             updateLogSummary(changeLogsCache);
@@ -1401,20 +1298,26 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         try {
-            const response = await fetch(`${buildApiUrl(API_ENDPOINTS.changeLogs)}?_t=${Date.now()}`);
+            const params = new URLSearchParams();
+            params.set('select', 'id,type,timestamp,source,target');
+            params.set('order', 'timestamp.desc');
+
+            const response = await fetch(buildSupabaseUrl('change_logs', params), {
+                method: 'GET',
+                headers: getSupabaseHeaders()
+            });
             if (!response.ok) {
-                throw new Error(`HTTP错误! 状态: ${response.status}`);
+                throw new Error(`Supabase 日志读取失败: HTTP ${response.status}`);
             }
 
             const payload = await response.json();
-            changeLogsCache = Array.isArray(payload.logs) ? payload.logs : [];
+            changeLogsCache = Array.isArray(payload) ? payload : [];
             displayChangeLog(changeLogsCache);
             updateLogSummary(changeLogsCache);
         } catch (error) {
             console.error('加载更换日志失败:', error);
-            apiAvailable = false;
             changeLogsCache = JSON.parse(localStorage.getItem(STORAGE_KEYS.changeLogs) || '[]');
-            showToast('后端日志加载失败，已切换本地日志', 'warning');
+            showToast('Supabase 日志加载失败，已切换本地日志', 'warning');
             displayChangeLog(changeLogsCache);
             updateLogSummary(changeLogsCache);
         }
@@ -1429,7 +1332,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let filteredLogs = changeLogs;
         if (dateFilter) {
             filteredLogs = changeLogs.filter(log => {
-                const logDate = new Date(log.timestamp).toISOString().split('T')[0];
+                const logDate = formatDateToYMD(new Date(log.timestamp));
                 return logDate === dateFilter;
             });
         }
@@ -1580,10 +1483,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         try {
-            if (apiAvailable) {
-                const response = await fetch(buildApiUrl(API_ENDPOINTS.changeLogs), { method: 'DELETE' });
+            if (isSupabaseConfigured()) {
+                const params = new URLSearchParams();
+                params.set('id', 'gt.0');
+                const response = await fetch(buildSupabaseUrl('change_logs', params), {
+                    method: 'DELETE',
+                    headers: getSupabaseHeaders({ Prefer: 'return=minimal' })
+                });
                 if (!response.ok) {
-                    throw new Error(`HTTP错误! 状态: ${response.status}`);
+                    throw new Error(`Supabase 清空日志失败: HTTP ${response.status}`);
                 }
             } else {
                 localStorage.removeItem(STORAGE_KEYS.changeLogs);
@@ -1594,12 +1502,11 @@ document.addEventListener('DOMContentLoaded', function() {
             showToast('所有更换日志已清空', 'success');
         } catch (error) {
             console.error('清空日志失败:', error);
-            apiAvailable = false;
             localStorage.removeItem(STORAGE_KEYS.changeLogs);
             changeLogsCache = [];
             displayChangeLog(changeLogsCache);
             updateLogSummary(changeLogsCache);
-            showToast('后端不可用，已清空本地日志', 'warning');
+            showToast('Supabase 不可用，已清空本地日志', 'warning');
         }
     }
 

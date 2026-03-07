@@ -1,13 +1,12 @@
 {
   "name": "duty-schedule-website",
   "version": "1.0.0",
-  "description": "Duty schedule website with backend persistence.",
-  "main": "server.js",
+  "private": true,
+  "description": "Duty schedule website (GitHub Pages + Supabase).",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "check:js": "node --check script.js",
     "import:month": "python tools/push_month_folder.py",
-    "test": "echo \"No automated tests configured\""
+    "test": "npm run check:js"
   },
   "keywords": [],
   "author": "",

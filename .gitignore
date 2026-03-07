@@ -1,43 +1,23 @@
-# 依赖目录
 node_modules/
-
-# 环境变量文件
 .env
-
-# 日志文件
 *.log
 
-# 操作系统生成文件
-.DS_Store
-
-# 编辑器目录
-.vscode/
-.idea/
-
-# 构建输出目录
-dist/
-build/
-
-# 忽略 Excel 临时文件
-~$*.xlsx
-
-# 忽略 node_modules（如果使用 Node.js）
-node_modules/
-
-# 忽略 IDE 文件
-.vscode/
-.idea/
-
-# 忽略操作系统文件
 .DS_Store
 Thumbs.db
 
-# 值班敏感数据（不上传 GitHub）
-data/schedule.json
-data/change_logs.json
-data/schedule_data.js
-data/monthly/
+.vscode/
+.idea/
+
+dist/
+build/
+
+# Excel temporary files
+~$*.xlsx
+
+# Raw monthly files should stay local
+*.xlsx
 monthly-data/
 
-# 每月排班原始文件
-*.xlsx
+# Runtime data should stay local (keep folder only)
+data/*
+!data/.gitkeep

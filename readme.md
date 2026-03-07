@@ -1,109 +1,94 @@
-# Duty Schedule (GitHub Pages + Zeabur)
+# 图书馆值班管理系统（GitHub Pages + Supabase）
 
-详细部署步骤见：`DEPLOY_ZEABUR.md`
+## 这个项目是做什么的
 
-## 目标架构
+这是一个值班排班展示与交换系统，核心功能是：
 
-- 前端：`GitHub Pages`（静态页面）
-- 后端：`Zeabur`（Node 服务 + 持久化卷）
-- 数据：只放在后端卷，不提交到 GitHub
+1. 展示每天二层/三层/四层的值班信息（每层 2 个时段）
+2. 管理员在页面中执行“交换/移动”操作
+3. 把修改结果持久化到 Supabase，页面刷新后不丢失
+4. 记录更换日志（谁和谁交换、时间、位置）
 
-这套架构下，值班交换后写入 Zeabur 后端，刷新不会回退。
+## 当前最小架构（已精简）
 
-## 后端改造点
+- 前端：GitHub Pages（静态）
+- 数据后端：Supabase（REST + PostgreSQL）
+- 月度导入：`tools/push_month_folder.py`（本地脚本，读取 `.xlsx` 上传）
 
-后端文件：`server.js`
+## 必要与不必要
 
-- 支持 `DATA_DIR` 环境变量（用于 Zeabur Volume 挂载目录）
-- 支持 `ALLOWED_ORIGINS` 环境变量（给 `github.io` 开 CORS）
-- 数据文件：
-  - `${DATA_DIR}/schedule.json`
-  - `${DATA_DIR}/change_logs.json`
-  - `${DATA_DIR}/schedule_data.js`
+必要：
 
-API：
+- `index.html`
+- `styles.css`
+- `script.js`
+- `config.js`
+- `supabase/schema.sql`
+- `tools/push_month_folder.py`
+- `.github/workflows/deploy-pages.yml`
 
-- `GET /api/health`
-- `GET /api/schedule`
-- `POST /api/schedule`
-- `GET /api/change-logs`
-- `POST /api/change-logs`
-- `DELETE /api/change-logs`
+不必要（已移除）：
 
-## 前端改造点
+- Zeabur 部署文件与说明
+- 本地 Node API 服务（`/api/*`）
+- GitHub Token 云同步模块
+- `data/schedule_data.js` 前端静态注入模式
+- 自动排班模块
+- OCR 预处理模块（按你的流程改为线下转换后再导入）
 
-前端配置文件：`config.js`
+## Supabase 一次性初始化
 
-- `CONFIG.API.BASE_URL`：后端地址
-- 推荐在 GitHub Pages 场景设置为你的 Zeabur 地址，如：
-  - `https://your-backend.zeabur.app`
+1. 在 Supabase 控制台打开 SQL Editor
+2. 执行 [`supabase/schema.sql`](supabase/schema.sql)
+3. 在 [`config.js`](config.js) 填入：
+   - `CONFIG.SUPABASE.URL`
+   - `CONFIG.SUPABASE.ANON_KEY`
 
-前端逻辑文件：`script.js`
+说明：前端只使用 `anon key`，不要放 `service_role key`。
 
-- 所有 API 调用改为基于 `CONFIG.API.BASE_URL`
-- API 不可用时，自动降级到本地缓存模式
+## 每月导入流程（保留历史）
 
-## 每月文件夹上传流程（保留历史）
+建议每月一个目录，例如 `monthly-data/2026-03/`，目录里放当月 `.xlsx`。
 
-新增脚本：`tools/push_month_folder.py`
-
-作用：
-
-1. 读取你每个月的文件夹（可包含一个或多个 `.xlsx`）
-2. 解析为日程数据（例如 `3.02-3.15.xlsx`）
-3. 先从后端拉取当前全量历史
-4. 只覆盖本次上传涉及日期
-5. 回写后端，历史月份保留
-
-依赖：
+先试运行：
 
 ```bash
-pip install -r tools/requirements.txt
+python tools/push_month_folder.py --folder "E:\duty-schedule-website\monthly-data\2026-03" --year 2026 --dry-run
 ```
 
-示例命令（从今年 3 月开始）：
+再正式上传：
 
 ```bash
-python tools/push_month_folder.py --folder "E:\\duty-schedule-website\\monthly-data\\2026-03" --api "https://your-backend.zeabur.app" --year 2026
+python tools/push_month_folder.py --folder "E:\duty-schedule-website\monthly-data\2026-03" --year 2026 --supabase-url "https://<your-project>.supabase.co" --supabase-service-key "<service_role_key>"
 ```
 
-建议每个月单独建一个目录（例如 `monthly-data/2026-03/`），目录内只放当月 `.xlsx`，避免误导入其他月份文件。
+脚本会仅覆盖本次上传涉及的日期，不会清空历史月份。
 
-## Zeabur 部署配置
+## GitHub Pages 部署与 404 排查
 
-已添加 `zbpack.json`：
+本仓库已提供 Pages workflow：[`deploy-pages.yml`](.github/workflows/deploy-pages.yml)。
 
-- `build_command`: `npm install`
-- `start_command`: `npm run start`
+请在 GitHub 仓库设置中确认：
 
-部署后建议配置环境变量：
+1. `Settings -> Pages -> Source` 选择 `GitHub Actions`
+2. 默认分支是 `main`
+3. Actions 里 `Deploy Pages` 工作流运行成功
 
-- `DATA_DIR=/data`（示例，需与你挂载卷路径一致）
-- `ALLOWED_ORIGINS=https://<你的用户名>.github.io,https://<你的自定义前端域名>`
+如果出现 404，按顺序检查：
 
-## 数据不进 GitHub
+1. 根目录存在 [`index.html`](index.html)
+2. 资源路径用相对路径（当前已是 `styles.css` / `script.js`）
+3. 等待 1-3 分钟后强刷
+4. 查看 Actions 的失败日志（最关键）
 
-`.gitignore` 已加入：
+## 数据文件与 Git
 
-- `data/schedule.json`
-- `data/change_logs.json`
-- `data/schedule_data.js`
-- `data/monthly/`
-- `monthly-data/`
-- `*.xlsx`
+`.gitignore` 已忽略每月原始 `.xlsx` 和本地 `data/` 数据，避免把敏感排班文件直接上传到 GitHub。
 
-注意：如果这些文件之前已经被 Git 跟踪，需要执行一次取消跟踪（保留本地文件）：
+## 本地检查
 
 ```bash
-git rm --cached data/schedule.json data/change_logs.json data/schedule_data.js
-git rm --cached *.xlsx
+npm test
+node --check script.js
+python tools/push_month_folder.py --folder "E:\duty-schedule-website" --year 2026 --dry-run
 ```
-
-## 本地运行
-
-```bash
-npm install
-npm start
-```
-
-访问：`http://localhost:3000`

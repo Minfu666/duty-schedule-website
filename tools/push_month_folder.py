@@ -1,56 +1,37 @@
 #!/usr/bin/env python3
 """
-Upload monthly duty schedules to backend while preserving history.
+Import monthly .xlsx folder and upsert into Supabase while preserving history.
 
 Usage:
-  python tools/push_month_folder.py --folder "E:\\duty-data\\2026-03" --api "https://your-backend.zeabur.app" --year 2026
+  python tools/push_month_folder.py \
+    --folder "E:\\monthly-data\\2026-03" \
+    --year 2026 \
+    --supabase-url "https://xxxx.supabase.co" \
+    --supabase-service-key "YOUR_SERVICE_ROLE_KEY"
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pandas as pd
 
 
 FLOOR_COLS = [
-    ("\u4e8c\u5c42", 1, 2),  # 二层
-    ("\u4e09\u5c42", 3, 4),  # 三层
-    ("\u56db\u5c42", 5, 6),  # 四层
+    ("\u4e8c\u5c42", 1, 2),
+    ("\u4e09\u5c42", 3, 4),
+    ("\u56db\u5c42", 5, 6),
 ]
 
 FLOOR_ORDER = {"\u4e8c\u5c42": 1, "\u4e09\u5c42": 2, "\u56db\u5c42": 3}
-
-
-def normalize_api_base(api_base: str) -> str:
-    return api_base.rstrip("/")
-
-
-def http_json(url: str, method: str = "GET", data: dict | None = None) -> dict:
-    payload = None
-    headers = {"Content-Type": "application/json; charset=utf-8"}
-
-    if data is not None:
-        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
-
-    req = urllib.request.Request(url=url, method=method, data=payload, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            text = resp.read().decode("utf-8")
-            if not text.strip():
-                return {}
-            return json.loads(text)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Network error: {exc}") from exc
 
 
 def parse_date_text(date_text: str, year: int) -> str | None:
@@ -66,11 +47,6 @@ def parse_single_excel(excel_path: pathlib.Path, year: int) -> dict[str, list[di
     df = pd.read_excel(excel_path, header=None)
     out: dict[str, list[dict]] = {}
 
-    # Row pattern:
-    # row 0: headers
-    # row 1: times for first date
-    # row 2: names for first date
-    # ...
     for row_idx in range(1, len(df), 2):
         if row_idx + 1 >= len(df):
             break
@@ -102,7 +78,7 @@ def parse_single_excel(excel_path: pathlib.Path, year: int) -> dict[str, list[di
                     continue
 
                 if pd.isna(name_val):
-                    name_text = "\u7a7a"  # 空
+                    name_text = "\u7a7a"
                 else:
                     name_text = str(name_val).strip()
                     if not name_text or name_text.lower() == "nan":
@@ -110,10 +86,11 @@ def parse_single_excel(excel_path: pathlib.Path, year: int) -> dict[str, list[di
 
                 entries.append(
                     {
+                        "date": date_key,
                         "floor": floor,
+                        "slot": slot,
                         "time": time_text,
                         "name": name_text,
-                        "slot": slot,
                     }
                 )
 
@@ -129,71 +106,139 @@ def parse_single_excel(excel_path: pathlib.Path, year: int) -> dict[str, list[di
     return out
 
 
-def parse_folder(folder: pathlib.Path, year: int) -> tuple[dict[str, list[dict]], list[pathlib.Path]]:
+def parse_folder(folder: pathlib.Path, year: int) -> tuple[list[dict], list[pathlib.Path], list[str]]:
     excel_files = sorted(folder.rglob("*.xlsx"))
     if not excel_files:
         raise RuntimeError(f"No .xlsx files found in: {folder}")
 
-    merged: dict[str, list[dict]] = {}
+    per_date: dict[str, list[dict]] = {}
     for excel_file in excel_files:
-        month_data = parse_single_excel(excel_file, year)
-        for date_key, entries in month_data.items():
-            merged[date_key] = entries
-    return merged, excel_files
+        data = parse_single_excel(excel_file, year)
+        for date_key, entries in data.items():
+            per_date[date_key] = entries
+
+    ordered_dates = sorted(per_date.keys())
+    rows: list[dict] = []
+    for date_key in ordered_dates:
+        rows.extend(per_date[date_key])
+    return rows, excel_files, ordered_dates
 
 
-def sort_schedule(schedule: dict[str, list[dict]]) -> dict[str, list[dict]]:
-    return dict(sorted(schedule.items(), key=lambda pair: pair[0]))
+def normalize_supabase_url(url: str) -> str:
+    return url.rstrip("/")
+
+
+def supabase_headers(service_key: str, extra: dict | None = None) -> dict:
+    headers = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "application/json",
+    }
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def rest_url(base_url: str, resource: str, params: dict | None = None) -> str:
+    base = f"{base_url}/rest/v1/{resource}"
+    if not params:
+        return base
+    query = urllib.parse.urlencode(params, safe="(),.*")
+    return f"{base}?{query}"
+
+
+def http_json(url: str, method: str, headers: dict, data=None):
+    payload = None
+    if data is not None:
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url=url, method=method, data=payload, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            text = resp.read().decode("utf-8")
+            if not text.strip():
+                return None
+            return json.loads(text)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Network error: {exc}") from exc
+
+
+def chunked(values: list[str], size: int) -> list[list[str]]:
+    return [values[i : i + size] for i in range(0, len(values), size)]
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Import monthly folder and push to backend API")
+    parser = argparse.ArgumentParser(description="Import monthly folder and push to Supabase")
     parser.add_argument("--folder", required=True, help="Folder containing monthly .xlsx files")
-    parser.add_argument("--api", required=True, help="Backend base URL, e.g. https://your-backend.zeabur.app")
-    parser.add_argument("--year", required=True, type=int, help="Year used for MM.DD date parsing, e.g. 2026")
-    parser.add_argument("--dry-run", action="store_true", help="Parse only; do not push to backend")
+    parser.add_argument("--year", required=True, type=int, help="Year used for MM.DD parsing, e.g. 2026")
+    parser.add_argument("--supabase-url", default=os.getenv("SUPABASE_URL", ""), help="Supabase project URL")
+    parser.add_argument(
+        "--supabase-service-key",
+        default=os.getenv("SUPABASE_SERVICE_KEY", ""),
+        help="Supabase service role key (used by import script only)",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Parse only; skip upload")
     args = parser.parse_args()
 
     folder = pathlib.Path(args.folder).expanduser().resolve()
     if not folder.exists() or not folder.is_dir():
         raise RuntimeError(f"Invalid folder: {folder}")
 
-    api_base = normalize_api_base(args.api)
-    month_data, excel_files = parse_folder(folder, args.year)
-    if not month_data:
-        raise RuntimeError("No valid schedule entries parsed from folder")
+    supabase_url = normalize_supabase_url(args.supabase_url)
+    service_key = args.supabase_service_key.strip()
+    if not args.dry_run and (not supabase_url or not service_key):
+        raise RuntimeError("--supabase-url and --supabase-service-key are required unless --dry-run")
 
-    month_data = sort_schedule(month_data)
-    month_dates = list(month_data.keys())
+    rows, excel_files, month_dates = parse_folder(folder, args.year)
+    if not rows:
+        raise RuntimeError("No valid entries parsed")
+
     print(f"Parsed files: {len(excel_files)}")
     print(f"Parsed dates: {len(month_dates)} ({month_dates[0]} -> {month_dates[-1]})")
+    print(f"Parsed rows : {len(rows)}")
 
     if args.dry_run:
-        print("Dry run enabled. Skip backend upload.")
+        print("Dry run enabled. Skip Supabase upload.")
         return 0
 
-    existing_payload = http_json(f"{api_base}/api/schedule", method="GET")
-    existing_schedule = existing_payload.get("schedule", {})
-    if not isinstance(existing_schedule, dict):
-        existing_schedule = {}
+    headers = supabase_headers(service_key)
 
-    before_count = len(existing_schedule)
-    merged_schedule = dict(existing_schedule)
-    for date_key, entries in month_data.items():
-        merged_schedule[date_key] = entries
-    merged_schedule = sort_schedule(merged_schedule)
+    existing_rows = http_json(
+        rest_url(supabase_url, "schedule_entries", {"select": "date"}),
+        method="GET",
+        headers=headers,
+    )
+    before_dates = len({item["date"] for item in (existing_rows or []) if "date" in item})
+
+    # Delete only uploaded month dates, preserve all other history.
+    for date_chunk in chunked(month_dates, 20):
+        date_filter = f"in.({','.join(date_chunk)})"
+        http_json(
+            rest_url(supabase_url, "schedule_entries", {"date": date_filter}),
+            method="DELETE",
+            headers=supabase_headers(service_key, {"Prefer": "return=minimal"}),
+        )
 
     http_json(
-        f"{api_base}/api/schedule",
+        rest_url(supabase_url, "schedule_entries"),
         method="POST",
-        data={"schedule": merged_schedule},
+        headers=supabase_headers(service_key, {"Prefer": "return=minimal"}),
+        data=rows,
     )
 
-    after_count = len(merged_schedule)
+    final_rows = http_json(
+        rest_url(supabase_url, "schedule_entries", {"select": "date"}),
+        method="GET",
+        headers=headers,
+    )
+    after_dates = len({item["date"] for item in (final_rows or []) if "date" in item})
+
     print("Upload complete.")
-    print(f"Total dates before: {before_count}")
-    print(f"Total dates after : {after_count}")
-    print(f"Updated dates      : {len(month_data)}")
+    print(f"Total dates before: {before_dates}")
+    print(f"Total dates after : {after_dates}")
+    print(f"Updated dates      : {len(month_dates)}")
     return 0
 
 

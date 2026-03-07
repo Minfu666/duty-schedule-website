@@ -1,10 +1,15 @@
 // 配置文件
+const storedSupabaseUrl = localStorage.getItem('duty_supabase_url') || '';
+const storedSupabaseAnonKey = localStorage.getItem('duty_supabase_anon_key') || '';
+
 const CONFIG = {
-    // API 配置
-    API: {
-        // GitHub Pages 部署时请填写 Zeabur 后端地址，例如：
-        // https://your-backend.zeabur.app
-        BASE_URL: window.__DUTY_API_BASE_URL__ || ''
+    // Supabase 配置
+    SUPABASE: {
+        // GitHub Pages 部署时请填写 Supabase 项目地址，例如：
+        // https://xxxx.supabase.co
+        URL: "https://xtghbtkmdpcorfjmxgld.supabase.co",
+        // Supabase anon key（可公开，勿填 service_role）
+        ANON_KEY: "sb_publishable_q9XxE069nPUZfM9hq7TArQ_HW1wd8jw"
     },
 
     // 管理员配置
@@ -52,62 +57,7 @@ const CONFIG = {
     }
 };
 
-// 安全相关的工具函数
-const SecurityUtils = {
-    // 生成哈希值（简单实现，生产环境建议使用更安全的算法）
-    simpleHash: function(str) {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            const char = str.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash; // 转换为32位整数
-        }
-        return hash.toString();
-    },
-
-    // 验证密码强度
-    validatePasswordStrength: function(password) {
-        const minLength = 6;
-        const hasUpperCase = /[A-Z]/.test(password);
-        const hasLowerCase = /[a-z]/.test(password);
-        const hasNumbers = /\d/.test(password);
-        const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-
-        const strength = {
-            score: 0,
-            feedback: []
-        };
-
-        if (password.length >= minLength) strength.score++;
-        else strength.feedback.push(`密码长度至少${minLength}位`);
-
-        if (hasUpperCase) strength.score++;
-        else strength.feedback.push('建议包含大写字母');
-
-        if (hasLowerCase) strength.score++;
-        else strength.feedback.push('建议包含小写字母');
-
-        if (hasNumbers) strength.score++;
-        else strength.feedback.push('建议包含数字');
-
-        if (hasSpecialChar) strength.score++;
-        else strength.feedback.push('建议包含特殊字符');
-
-        return strength;
-    },
-
-    // 生成随机密码
-    generateRandomPassword: function(length = 12) {
-        const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-        let password = '';
-        for (let i = 0; i < length; i++) {
-            password += charset.charAt(Math.floor(Math.random() * charset.length));
-        }
-        return password;
-    }
-};
-
 // 导出配置（如果使用模块系统）
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { CONFIG, SecurityUtils };
+    module.exports = { CONFIG };
 }
