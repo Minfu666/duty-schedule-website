@@ -272,14 +272,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
             if (!dateRegex.test(targetDate)) {
                 errors.push('目标日期格式无效');
-            } else {
-                const targetDateObj = new Date(targetDate);
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-
-                if (targetDateObj < today) {
-                    errors.push('目标日期不能早于今天');
-                }
             }
         }
 
@@ -781,6 +773,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('selected-floor').textContent = currentSelectedSlot.floor;
                 document.getElementById('selected-time').textContent = currentSelectedSlot.time;
                 document.getElementById('selected-name').textContent = currentSelectedSlot.name;
+                showToast('已开启历史日期交换：可选择早于今天的日期', 'warning');
                 
                 // 默认目标日期为当前日期
                 document.getElementById('target-date').value = currentDate;
