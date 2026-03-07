@@ -14,6 +14,8 @@
             <div class="header-actions">
                 <button id="admin-mode" class="admin-btn">管理员模式</button>
                 <button id="calendar-btn" class="calendar-btn">📅 查看月历</button>
+                <button id="change-log-btn" class="change-log-btn" style="display: none;">📝 更换日志</button>
+                <button id="github-sync-btn" class="github-sync-btn" style="display: none;">🔄 云端同步</button>
             </div>
         </div>
     </header>
@@ -131,12 +133,143 @@
         </div>
     </div>
 
+    <!-- 更换日志模态框 -->
+    <div id="change-log-modal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content change-log-modal">
+            <div class="modal-header">
+                <h3>📝 值班更换日志</h3>
+                <button class="close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="log-controls">
+                    <div class="log-filter">
+                        <label for="log-date-filter">日期筛选：</label>
+                        <input type="date" id="log-date-filter" class="date-input">
+                        <button id="clear-date-filter" class="clear-btn">清除</button>
+                    </div>
+                    <div class="log-actions">
+                        <button id="export-log" class="export-btn">📥 导出日志</button>
+                        <button id="clear-all-log" class="clear-all-btn">🗑️ 清空日志</button>
+                    </div>
+                </div>
+
+                <div class="log-summary">
+                    <div class="summary-item">
+                        <span class="summary-label">总更换次数：</span>
+                        <span id="total-changes" class="summary-value">0</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">涉及人员：</span>
+                        <span id="involved-people" class="summary-value">0</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="summary-label">最近更换：</span>
+                        <span id="last-change-time" class="summary-value">无</span>
+                    </div>
+                </div>
+
+                <div id="change-log-container" class="change-log-container">
+                    <div class="log-empty-message">暂无更换记录</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub同步模态框 -->
+    <div id="github-sync-modal" class="modal">
+        <div class="modal-overlay"></div>
+        <div class="modal-content github-sync-modal">
+            <div class="modal-header">
+                <h3>🔄 GitHub云端同步</h3>
+                <button class="close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Token设置区域 -->
+                <div id="token-setup" class="sync-section">
+                    <h4>🔐 设置GitHub访问令牌</h4>
+                    <p>请先创建GitHub Personal Access Token：</p>
+                    <ol class="instruction-list">
+                        <li>访问 <a href="https://github.com/settings/tokens" target="_blank">GitHub Settings → Developer settings → Personal access tokens</a></li>
+                        <li>点击 "Generate new token (classic)"</li>
+                        <li>勾选 "repo" 权限</li>
+                        <li>生成token并复制</li>
+                    </ol>
+
+                    <div class="token-input-group">
+                        <label for="github-repo">GitHub仓库：</label>
+                        <input type="text" id="github-repo" class="repo-input" placeholder="用户名/仓库名" value="your-username/your-repo">
+                    </div>
+
+                    <div class="token-input-group">
+                        <label for="github-token">访问令牌：</label>
+                        <input type="password" id="github-token" class="token-input" placeholder="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">
+                        <button id="save-token" class="save-token-btn">保存令牌</button>
+                    </div>
+
+                    <button id="test-connection" class="test-connection-btn">测试连接</button>
+                </div>
+
+                <!-- 同步操作区域 -->
+                <div id="sync-operations" class="sync-section" style="display: none;">
+                    <h4>📤 数据同步操作</h4>
+
+                    <div class="sync-status">
+                        <div class="status-item">
+                            <span class="status-label">连接状态：</span>
+                            <span id="connection-status" class="status-value">未连接</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">仓库：</span>
+                            <span id="repo-status" class="status-value">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">用户：</span>
+                            <span id="user-status" class="status-value">-</span>
+                        </div>
+                    </div>
+
+                    <div class="sync-buttons">
+                        <button id="sync-to-github" class="sync-btn upload-btn">
+                            📤 上传到GitHub
+                        </button>
+                        <button id="sync-from-github" class="sync-btn download-btn">
+                            📥 从GitHub下载
+                        </button>
+                        <button id="auto-sync-toggle" class="sync-btn auto-sync-btn">
+                            🔄 自动同步: 关闭
+                        </button>
+                    </div>
+
+                    <div class="sync-info">
+                        <p><strong>说明：</strong></p>
+                        <ul>
+                            <li>上传到GitHub：将当前修改保存到云端，所有设备都能看到</li>
+                            <li>从GitHub下载：获取云端最新数据，覆盖本地修改</li>
+                            <li>自动同步：每次修改后自动上传到GitHub</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- 同步日志 -->
+                <div id="sync-log" class="sync-section">
+                    <h4>📝 同步日志</h4>
+                    <div id="sync-log-content" class="log-content">
+                        <div class="log-entry">暂无同步记录</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 加载指示器 -->
     <div id="loading" class="loading-overlay">
         <div class="loading-spinner"></div>
         <p>加载中...</p>
     </div>
 
+    <script src="config.js"></script>
+    <script src="github_sync.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
