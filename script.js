@@ -2,11 +2,62 @@
 document.addEventListener('DOMContentLoaded', function() {
     // 全局变量
     let scheduleData = {};
-    let currentDate = new Date().toISOString().split('T')[0];
+    let currentDate = getTodayDateStr();
     let isAdminMode = false;
     let currentSelectedSlot = null;
     let loginAttempts = 0;
     let lockoutUntil = null;
+    let changeLogsCache = [];
+    let apiAvailable = false;
+
+    const API_ENDPOINTS = {
+        schedule: '/api/schedule',
+        changeLogs: '/api/change-logs'
+    };
+    const STORAGE_KEYS = {
+        schedule: 'scheduleData',
+        changeLogs: 'changeLogs'
+    };
+
+    function getTodayDateStr() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    function formatDateToYMD(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    function getNearestDateBySchedule(data, fallbackDate) {
+        const dates = Object.keys(data || {}).sort();
+        if (dates.length === 0) {
+            return fallbackDate;
+        }
+
+        if (data[fallbackDate]) {
+            return fallbackDate;
+        }
+
+        const targetTime = new Date(fallbackDate).getTime();
+        let nearestDate = dates[0];
+        let nearestDiff = Math.abs(new Date(dates[0]).getTime() - targetTime);
+
+        dates.forEach(date => {
+            const diff = Math.abs(new Date(date).getTime() - targetTime);
+            if (diff < nearestDiff) {
+                nearestDiff = diff;
+                nearestDate = date;
+            }
+        });
+
+        return nearestDate;
+    }
 
     // 从配置获取管理员密码
     const getAdminPassword = function() {
@@ -25,9 +76,29 @@ document.addEventListener('DOMContentLoaded', function() {
         return CONFIG.ADMIN.DEFAULT_PASSWORD;
     };
 
-    // 保存排班数据到本地存储
-    function saveScheduleData() {
-        localStorage.setItem('scheduleData', JSON.stringify(scheduleData));
+    // 保存排班数据到后端
+    async function saveScheduleData() {
+        const normalized = processScheduleData(scheduleData);
+        if (apiAvailable) {
+            try {
+                const response = await fetch(API_ENDPOINTS.schedule, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schedule: normalized })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`保存排班失败: HTTP ${response.status}`);
+                }
+            } catch (error) {
+                console.warn('后端保存失败，降级为本地保存:', error);
+                apiAvailable = false;
+                showToast('后端不可用，已切换为本地保存模式', 'warning');
+            }
+        }
+
+        localStorage.setItem(STORAGE_KEYS.schedule, JSON.stringify(normalized));
+        scheduleData = normalized;
     }
 
     // 初始化应用
@@ -46,56 +117,90 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // 加载JSON数据
+    async function loadFromApi() {
+        const response = await fetch(`${API_ENDPOINTS.schedule}?_t=${Date.now()}`);
+        if (!response.ok) {
+            throw new Error(`HTTP错误! 状态: ${response.status}`);
+        }
+        const payload = await response.json();
+        const data = payload && payload.schedule ? payload.schedule : payload;
+        apiAvailable = true;
+        return data;
+    }
+
+    async function loadFromStaticJson() {
+        const response = await fetch(`data/schedule.json?_t=${Date.now()}`);
+        if (!response.ok) {
+            throw new Error(`静态数据HTTP错误! 状态: ${response.status}`);
+        }
+        return await response.json();
+    }
+
+    function loadFromEmbeddedData() {
+        if (window.__SCHEDULE_DATA__ && typeof window.__SCHEDULE_DATA__ === 'object') {
+            return window.__SCHEDULE_DATA__;
+        }
+        throw new Error('内嵌数据不存在');
+    }
+
+    function loadFromLocalStorage() {
+        const raw = localStorage.getItem(STORAGE_KEYS.schedule);
+        if (!raw) {
+            throw new Error('本地缓存数据不存在');
+        }
+        return JSON.parse(raw);
+    }
+
+    // 加载排班数据（API -> 静态JSON -> 内嵌JS -> localStorage）
     async function loadScheduleData() {
+        let data = null;
         try {
-            // 添加时间戳防止缓存，并尝试从本地存储加载数据
-            const cacheVersion = localStorage.getItem('dataCacheVersion') || '0';
-            const response = await fetch(`data/schedule.json?v=${cacheVersion}&_t=${new Date().getTime()}`);
-            if (!response.ok) {
-                throw new Error(`HTTP错误! 状态: ${response.status}`);
-            }
-            const data = await response.json();
+            data = await loadFromApi();
+        } catch (apiError) {
+            apiAvailable = false;
+            console.warn('API加载失败，尝试静态方式加载:', apiError);
+        }
 
-            // 转换数据格式，添加slot信息
+        if (!data) {
+            try {
+                data = await loadFromStaticJson();
+                console.log('已从静态JSON加载数据');
+            } catch (staticError) {
+                console.warn('静态JSON加载失败，尝试内嵌数据:', staticError);
+            }
+        }
+
+        if (!data) {
+            try {
+                data = loadFromEmbeddedData();
+                console.log('已从内嵌数据加载数据');
+            } catch (embeddedError) {
+                console.warn('内嵌数据加载失败，尝试本地缓存:', embeddedError);
+            }
+        }
+
+        if (!data) {
+            try {
+                data = loadFromLocalStorage();
+                console.log('已从本地缓存加载数据');
+            } catch (localError) {
+                console.error('本地缓存加载失败:', localError);
+            }
+        }
+
+        if (!data) {
+            showToast('数据加载失败：API和本地数据均不可用', 'error');
+            throw new Error('无法加载排班数据');
+        }
+
+        try {
             scheduleData = processScheduleData(data);
-
-            // 加载本地修改的数据
-            const localChanges = localStorage.getItem('localScheduleChanges');
-            if (localChanges) {
-                try {
-                    const changes = JSON.parse(localChanges);
-                    // 应用本地修改
-                    applyLocalChanges(changes);
-                    console.log('已加载本地修改');
-                } catch (e) {
-                    console.warn('本地修改数据格式错误:', e);
-                }
-            }
-
+            currentDate = getNearestDateBySchedule(scheduleData, currentDate);
             console.log('数据加载成功', scheduleData);
-
         } catch (error) {
             console.error('加载数据失败:', error);
             showToast('数据加载失败: ' + error.message, 'error');
             throw error;
-        }
-    }
-
-    // 应用本地修改
-    function applyLocalChanges(changes) {
-        for (const [date, changeInfo] of Object.entries(changes)) {
-            if (scheduleData[date]) {
-                const index = scheduleData[date].findIndex(item =>
-                    item.floor === changeInfo.floor && item.slot === changeInfo.slot
-                );
-                if (index !== -1) {
-                    scheduleData[date][index] = {
-                        ...scheduleData[date][index],
-                        ...changeInfo.changes
-                    };
-                }
-            }
         }
     }
 
@@ -230,15 +335,13 @@ document.addEventListener('DOMContentLoaded', function() {
         return errors;
     }
 
-    // 保存本地修改
+    // 校验交换改动数据
     function saveLocalChanges(date, floor, slot, changes) {
         try {
-            // 验证输入参数
             if (!date || !floor || slot === undefined || !changes) {
                 throw new Error('保存参数无效');
             }
 
-            // 验证修改内容
             if (changes.name && !validatePersonName(changes.name)) {
                 throw new Error('人员姓名格式无效');
             }
@@ -246,37 +349,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (changes.time && !validateTimeFormat(changes.time)) {
                 throw new Error('时间格式无效');
             }
-
-            const localChanges = JSON.parse(localStorage.getItem(CONFIG.CACHE.LOCAL_CHANGES_KEY) || '{}');
-            const key = `${date}-${floor}-${slot}`;
-
-            // 限制本地修改数量
-            const changeKeys = Object.keys(localChanges);
-            if (changeKeys.length >= CONFIG.CACHE.MAX_LOCAL_CHANGES) {
-                // 删除最旧的修改记录
-                const oldestKey = changeKeys.sort((a, b) => {
-                    const timeA = new Date(localChanges[a].timestamp).getTime();
-                    const timeB = new Date(localChanges[b].timestamp).getTime();
-                    return timeA - timeB;
-                })[0];
-                delete localChanges[oldestKey];
-            }
-
-            localChanges[key] = {
-                date,
-                floor,
-                slot,
-                changes,
-                timestamp: new Date().toISOString()
-            };
-
-            localStorage.setItem(CONFIG.CACHE.LOCAL_CHANGES_KEY, JSON.stringify(localChanges));
-
-            if (CONFIG.DEVELOPMENT.DEBUG) {
-                console.log('保存本地修改:', localChanges[key]);
-            }
         } catch (error) {
-            console.error('保存本地修改失败:', error);
+            console.error('修改数据校验失败:', error);
             showToast('保存修改失败: ' + error.message, 'error');
             throw error;
         }
@@ -288,32 +362,59 @@ document.addEventListener('DOMContentLoaded', function() {
         localStorage.setItem('dataCacheVersion', currentVersion);
     }
 
-    // 处理数据格式，添加slot信息
+    function inferSlotFromTime(time) {
+        const normalized = String(time || '').replace(/\s+/g, '');
+        if (!normalized) return 1;
+        if (normalized.includes('19:00-21:00') || normalized.includes('19:00')) return 2;
+        return 1;
+    }
+
+    // 处理数据格式，统一排序与slot
     function processScheduleData(data) {
         const processedData = {};
-        
-        for (const [date, entries] of Object.entries(data)) {
-            processedData[date] = [];
-            
-            // 按楼层分组
-            const floorGroups = {
-                '二层': entries.filter(item => item.floor === '二层'),
-                '三层': entries.filter(item => item.floor === '三层'),
-                '四层': entries.filter(item => item.floor === '四层')
-            };
-            
-            // 为每个时间段添加slot编号
-            for (const [floor, items] of Object.entries(floorGroups)) {
-                items.forEach((item, index) => {
-                    processedData[date].push({
-                        ...item,
-                        slot: index + 1
-                    });
-                });
-            }
+
+        if (!data || typeof data !== 'object') {
+            return processedData;
         }
-        
-        return processedData;
+
+        const floorOrder = { '二层': 1, '三层': 2, '四层': 3 };
+
+        for (const [date, entries] of Object.entries(data)) {
+            if (!Array.isArray(entries)) {
+                processedData[date] = [];
+                continue;
+            }
+
+            const normalizedEntries = entries
+                .filter(item => item && typeof item === 'object' && floorOrder[item.floor])
+                .map(item => {
+                    const parsedSlot = parseInt(item.slot, 10);
+                    return {
+                        ...item,
+                        time: String(item.time || '暂无').trim(),
+                        name: String(item.name || '暂无').trim(),
+                        slot: [1, 2].includes(parsedSlot) ? parsedSlot : inferSlotFromTime(item.time)
+                    };
+                })
+                .sort((a, b) => {
+                    const floorDiff = floorOrder[a.floor] - floorOrder[b.floor];
+                    if (floorDiff !== 0) return floorDiff;
+
+                    const slotDiff = a.slot - b.slot;
+                    if (slotDiff !== 0) return slotDiff;
+
+                    const timeDiff = a.time.localeCompare(b.time, 'zh-CN');
+                    if (timeDiff !== 0) return timeDiff;
+
+                    return a.name.localeCompare(b.name, 'zh-CN');
+                });
+
+            processedData[date] = normalizedEntries;
+        }
+
+        return Object.fromEntries(
+            Object.entries(processedData).sort((a, b) => a[0].localeCompare(b[0]))
+        );
     }
 
     // 设置事件监听器
@@ -516,12 +617,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const date = new Date(currentDate);
         
         if (days === 0) {
-            date.setTime(Date.now());
+            date.setTime(new Date().getTime());
         } else {
             date.setDate(date.getDate() + days);
         }
         
-        currentDate = date.toISOString().split('T')[0];
+        currentDate = formatDateToYMD(date);
         loadDateData(currentDate);
         updateDateDisplay(currentDate);
     }
@@ -667,7 +768,6 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 // 调用实际的交换逻辑
                 await handleSwap(currentSelectedSlot, targetDate, targetFloor, targetSlot);
-                showToast('值班信息交换成功！', 'success');
             } catch (error) {
                 console.error('交换操作失败:', error);
                 showToast('值班信息交换失败: ' + error.message, 'error');
@@ -687,7 +787,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // 今天日期作为默认目标日期
         const todayInput = document.getElementById('target-date');
-        todayInput.value = new Date().toISOString().split('T')[0];
+        todayInput.value = getTodayDateStr();
     }
 
     // 显示交换模态框
@@ -707,18 +807,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // 处理交换
-    function handleSwap(sourceSlot, targetDate, targetFloor, targetSlot) {
+    async function handleSwap(sourceSlot, targetDate, targetFloor, targetSlot) {
 
         const sourceDate = sourceSlot.date;
         const sourceFloor = sourceSlot.floor;
         const sourceSlotNum = sourceSlot.slot;
 
-        // 确保目标日期有数据结构
         if (!scheduleData[targetDate]) {
             scheduleData[targetDate] = [];
         }
 
-        // 找到源和目标在数据中的实际对象
         let sourceEntry = scheduleData[sourceDate].find(item =>
             item.floor === sourceFloor && item.slot === sourceSlotNum
         );
@@ -727,22 +825,15 @@ document.addEventListener('DOMContentLoaded', function() {
         );
 
         if (!sourceEntry) {
-            showToast('未找到源值班信息。', 'error');
-            return;
+            throw new Error('未找到源值班信息');
         }
 
-        // 确保目标日期有数据结构
-        if (!scheduleData[targetDate]) {
-            scheduleData[targetDate] = [];
-        }
+        const operationType = targetEntry ? 'swap' : 'move';
 
-        // 执行交换逻辑
         if (targetEntry) {
-            // 交换时间和名字
             const tempTime = sourceEntry.time;
             const tempName = sourceEntry.name;
 
-            // 记录交换前的数据用于日志
             const sourceBefore = {
                 date: sourceDate,
                 floor: sourceFloor,
@@ -763,7 +854,6 @@ document.addEventListener('DOMContentLoaded', function() {
             targetEntry.time = tempTime;
             targetEntry.name = tempName;
 
-            // 记录交换后的数据用于日志
             const sourceAfter = {
                 date: sourceDate,
                 floor: sourceFloor,
@@ -779,7 +869,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 slot: targetSlot
             };
 
-            // 保存本地修改
             saveLocalChanges(sourceDate, sourceFloor, sourceSlotNum, {
                 time: sourceEntry.time,
                 name: sourceEntry.name
@@ -789,19 +878,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 name: targetEntry.name
             });
 
-            // 记录更换日志
-            recordChangeLog('swap', sourceBefore, sourceAfter);
+            await recordChangeLog('swap', sourceBefore, sourceAfter);
             if (sourceDate !== targetDate || sourceFloor !== targetFloor || sourceSlotNum !== targetSlot) {
-                recordChangeLog('swap', targetBefore, targetAfter);
+                await recordChangeLog('swap', targetBefore, targetAfter);
             }
-
-            showToast('值班信息已交换！', 'success');
-            highlightSwappedBlock(sourceFloor, sourceSlot);
-            highlightSwappedBlock(targetFloor, targetSlot);
         } else {
-            // 如果目标时段不存在，则将源时段移动到目标日期/楼层/时段，并清空源时段
-
-            // 记录移动前的数据用于日志
             const sourceBefore = {
                 date: sourceDate,
                 floor: sourceFloor,
@@ -810,15 +891,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 slot: sourceSlotNum
             };
 
+            const movedTime = sourceEntry.time;
+            const movedName = sourceEntry.name;
+
             const newTargetEntry = {
                 floor: targetFloor,
-                time: sourceEntry.time,
-                name: sourceEntry.name,
+                time: movedTime,
+                name: movedName,
                 slot: targetSlot
             };
             scheduleData[targetDate].push(newTargetEntry);
 
-            // 记录移动后的数据用于日志
             const sourceAfter = {
                 date: sourceDate,
                 floor: sourceFloor,
@@ -829,41 +912,43 @@ document.addEventListener('DOMContentLoaded', function() {
             const targetAfter = {
                 date: targetDate,
                 floor: targetFloor,
-                time: sourceEntry.time,
-                name: sourceEntry.name,
+                time: movedTime,
+                name: movedName,
                 slot: targetSlot
             };
 
-            // 清空源时段
             saveLocalChanges(sourceDate, sourceFloor, sourceSlotNum, {
                 time: '暂无',
                 name: '暂无'
             });
             saveLocalChanges(targetDate, targetFloor, targetSlot, {
-                time: sourceEntry.time,
-                name: sourceEntry.name
+                time: movedTime,
+                name: movedName
             });
 
             sourceEntry.time = '暂无';
             sourceEntry.name = '暂无';
 
-            // 记录更换日志
-            recordChangeLog('move', sourceBefore, sourceAfter);
-            recordChangeLog('move', sourceBefore, targetAfter);
-
-            showToast('值班信息已移动！', 'success');
-            highlightSwappedBlock(targetFloor, targetSlot);
+            await recordChangeLog('move', sourceBefore, sourceAfter);
+            await recordChangeLog('move', sourceBefore, targetAfter);
         }
 
-        // 保存更新后的数据到本地存储
-        saveScheduleData();
-        // 更新UI显示
-        updateDateDisplay(currentDate);
+        scheduleData = processScheduleData(scheduleData);
+        await saveScheduleData();
 
-        // 更新UI
+        updateDateDisplay(currentDate);
         loadDateData(sourceDate);
         if (sourceDate !== targetDate) {
             loadDateData(targetDate);
+        }
+
+        if (operationType === 'swap') {
+            highlightSwappedBlock(sourceFloor, sourceSlotNum);
+            highlightSwappedBlock(targetFloor, targetSlot);
+            showToast('值班信息已交换！', 'success');
+        } else {
+            highlightSwappedBlock(targetFloor, targetSlot);
+            showToast('值班信息已移动！', 'success');
         }
 
         document.getElementById('swap-modal').style.display = 'none';
@@ -1221,8 +1306,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const modalOverlays = document.querySelectorAll('.modal-overlay');
 
         // 打开更换日志
-        changeLogBtn.addEventListener('click', function() {
-            loadChangeLog();
+        changeLogBtn.addEventListener('click', async function() {
+            await loadChangeLog();
             changeLogModal.style.display = 'block';
             document.body.style.overflow = 'hidden';
         });
@@ -1255,8 +1340,8 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('clear-all-log').addEventListener('click', clearAllChangeLog);
     }
 
-    // 记录更换日志
-    function recordChangeLog(type, sourceData, targetData) {
+    // 记录更换日志（写入后端）
+    async function recordChangeLog(type, sourceData, targetData) {
         const changeLog = {
             id: Date.now().toString(),
             type: type, // 'swap', 'move', 'edit'
@@ -1265,26 +1350,67 @@ document.addEventListener('DOMContentLoaded', function() {
             target: targetData
         };
 
-        let changeLogs = JSON.parse(localStorage.getItem('changeLogs') || '[]');
-        changeLogs.unshift(changeLog); // 新记录添加到开头
+        if (apiAvailable) {
+            try {
+                const response = await fetch(API_ENDPOINTS.changeLogs, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ log: changeLog })
+                });
 
-        // 限制日志数量，保留最近100条
-        if (changeLogs.length > 100) {
-            changeLogs = changeLogs.slice(0, 100);
+                if (!response.ok) {
+                    throw new Error(`记录更换日志失败: HTTP ${response.status}`);
+                }
+
+                if (CONFIG.DEVELOPMENT.DEBUG) {
+                    console.log('记录更换日志(后端):', changeLog);
+                }
+                return;
+            } catch (error) {
+                console.warn('后端日志写入失败，降级本地日志:', error);
+                apiAvailable = false;
+            }
         }
 
-        localStorage.setItem('changeLogs', JSON.stringify(changeLogs));
+        changeLogsCache = JSON.parse(localStorage.getItem(STORAGE_KEYS.changeLogs) || '[]');
+        changeLogsCache.unshift(changeLog);
+        if (changeLogsCache.length > 100) {
+            changeLogsCache = changeLogsCache.slice(0, 100);
+        }
+        localStorage.setItem(STORAGE_KEYS.changeLogs, JSON.stringify(changeLogsCache));
 
         if (CONFIG.DEVELOPMENT.DEBUG) {
-            console.log('记录更换日志:', changeLog);
+            console.log('记录更换日志(本地):', changeLog);
         }
     }
 
     // 加载更换日志
-    function loadChangeLog() {
-        const changeLogs = JSON.parse(localStorage.getItem('changeLogs') || '[]');
-        displayChangeLog(changeLogs);
-        updateLogSummary(changeLogs);
+    async function loadChangeLog() {
+        if (!apiAvailable) {
+            changeLogsCache = JSON.parse(localStorage.getItem(STORAGE_KEYS.changeLogs) || '[]');
+            displayChangeLog(changeLogsCache);
+            updateLogSummary(changeLogsCache);
+            return;
+        }
+
+        try {
+            const response = await fetch(`${API_ENDPOINTS.changeLogs}?_t=${Date.now()}`);
+            if (!response.ok) {
+                throw new Error(`HTTP错误! 状态: ${response.status}`);
+            }
+
+            const payload = await response.json();
+            changeLogsCache = Array.isArray(payload.logs) ? payload.logs : [];
+            displayChangeLog(changeLogsCache);
+            updateLogSummary(changeLogsCache);
+        } catch (error) {
+            console.error('加载更换日志失败:', error);
+            apiAvailable = false;
+            changeLogsCache = JSON.parse(localStorage.getItem(STORAGE_KEYS.changeLogs) || '[]');
+            showToast('后端日志加载失败，已切换本地日志', 'warning');
+            displayChangeLog(changeLogsCache);
+            updateLogSummary(changeLogsCache);
+        }
     }
 
     // 显示更换日志
@@ -1381,8 +1507,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 筛选更换日志
     function filterChangeLog() {
-        const changeLogs = JSON.parse(localStorage.getItem('changeLogs') || '[]');
-        displayChangeLog(changeLogs);
+        displayChangeLog(changeLogsCache);
     }
 
     // 清除日期筛选
@@ -1393,7 +1518,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 导出更换日志
     function exportChangeLog() {
-        const changeLogs = JSON.parse(localStorage.getItem('changeLogs') || '[]');
+        const changeLogs = changeLogsCache;
 
         if (changeLogs.length === 0) {
             showToast('没有可导出的日志记录', 'warning');
@@ -1442,14 +1567,33 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // 清空所有更换日志
-    function clearAllChangeLog() {
+    async function clearAllChangeLog() {
         if (!confirm('确定要清空所有更换日志吗？此操作不可恢复。')) {
             return;
         }
 
-        localStorage.removeItem('changeLogs');
-        loadChangeLog();
-        showToast('所有更换日志已清空', 'success');
+        try {
+            if (apiAvailable) {
+                const response = await fetch(API_ENDPOINTS.changeLogs, { method: 'DELETE' });
+                if (!response.ok) {
+                    throw new Error(`HTTP错误! 状态: ${response.status}`);
+                }
+            } else {
+                localStorage.removeItem(STORAGE_KEYS.changeLogs);
+                changeLogsCache = [];
+            }
+
+            await loadChangeLog();
+            showToast('所有更换日志已清空', 'success');
+        } catch (error) {
+            console.error('清空日志失败:', error);
+            apiAvailable = false;
+            localStorage.removeItem(STORAGE_KEYS.changeLogs);
+            changeLogsCache = [];
+            displayChangeLog(changeLogsCache);
+            updateLogSummary(changeLogsCache);
+            showToast('后端不可用，已清空本地日志', 'warning');
+        }
     }
 
     // 启动应用
