@@ -1,5 +1,12 @@
 // 配置文件
 const CONFIG = {
+    // API 配置
+    API: {
+        // GitHub Pages 部署时请填写 Zeabur 后端地址，例如：
+        // https://your-backend.zeabur.app
+        BASE_URL: window.__DUTY_API_BASE_URL__ || ''
+    },
+
     // 管理员配置
     ADMIN: {
         // 默认密码，生产环境应该通过环境变量设置

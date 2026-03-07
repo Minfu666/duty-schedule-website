@@ -7,11 +7,20 @@ const HOST = '0.0.0.0';
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 const ROOT_DIR = __dirname;
-const DATA_DIR = path.join(ROOT_DIR, 'data');
+const DATA_DIR = process.env.DATA_DIR
+    ? path.resolve(process.env.DATA_DIR)
+    : path.join(ROOT_DIR, 'data');
 const SCHEDULE_FILE = path.join(DATA_DIR, 'schedule.json');
 const SCHEDULE_EMBED_FILE = path.join(DATA_DIR, 'schedule_data.js');
 const CHANGE_LOG_FILE = path.join(DATA_DIR, 'change_logs.json');
 const MAX_CHANGE_LOGS = 2000;
+const ALLOWED_ORIGINS_RAW = String(process.env.ALLOWED_ORIGINS || '').trim();
+const ALLOWED_ORIGINS = ALLOWED_ORIGINS_RAW
+    ? ALLOWED_ORIGINS_RAW
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : ['*'];
 
 const FLOOR_ORDER = { '二层': 1, '三层': 2, '四层': 3 };
 
@@ -133,6 +142,31 @@ function sendJson(res, statusCode, data) {
 function sendText(res, statusCode, message) {
     res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end(message);
+}
+
+function resolveAllowedOrigin(requestOrigin) {
+    if (!requestOrigin) {
+        return null;
+    }
+
+    if (ALLOWED_ORIGINS.includes('*')) {
+        return '*';
+    }
+
+    return ALLOWED_ORIGINS.includes(requestOrigin) ? requestOrigin : null;
+}
+
+function applyCorsHeaders(req, res) {
+    const requestOrigin = req.headers.origin;
+    const allowedOrigin = resolveAllowedOrigin(requestOrigin);
+
+    if (allowedOrigin) {
+        res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+        res.setHeader('Vary', 'Origin');
+    }
+
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
 }
 
 function parseRequestBody(req) {
@@ -279,6 +313,13 @@ async function handleApiRequest(req, res, pathname) {
 
 const server = http.createServer(async (req, res) => {
     ensureDataFiles();
+    applyCorsHeaders(req, res);
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
 
     const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = requestUrl.pathname;
@@ -316,4 +357,6 @@ server.listen(PORT, HOST, () => {
     ensureDataFiles();
     syncEmbeddedScheduleFile();
     console.log(`Duty schedule server running on http://localhost:${PORT}`);
+    console.log(`DATA_DIR=${DATA_DIR}`);
+    console.log(`ALLOWED_ORIGINS=${ALLOWED_ORIGINS.join(',')}`);
 });

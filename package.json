@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "import:month": "python tools/push_month_folder.py",
     "test": "echo \"No automated tests configured\""
   },
   "keywords": [],

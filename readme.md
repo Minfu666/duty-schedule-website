@@ -1,87 +1,109 @@
-# 图书馆值班管理系统（duty-schedule-website）
+# Duty Schedule (GitHub Pages + Zeabur)
 
-这是一个用于“查看值班表 + 管理员交换值班”的小系统。  
-当前版本已经改为前后端一体运行，交换后会写入后端文件，刷新页面不会丢失。
+详细部署步骤见：`DEPLOY_ZEABUR.md`
 
-## 目前范围（按你的要求）
+## 目标架构
 
-- 保留：按图片对应的值班结构展示（按楼层、时段）
-- 保留：管理员交换/移动值班
-- 保留：排序规则统一，保证展示与交换定位稳定
-- 保留：后端持久化（最关键）
-- 不做：自动排班
-- 不做：OCR 图片识别模块
+- 前端：`GitHub Pages`（静态页面）
+- 后端：`Zeabur`（Node 服务 + 持久化卷）
+- 数据：只放在后端卷，不提交到 GitHub
 
-## 核心逻辑
+这套架构下，值班交换后写入 Zeabur 后端，刷新不会回退。
 
-### 1) 排序与定位规则（统一）
+## 后端改造点
 
-数据统一按以下规则排序：
+后端文件：`server.js`
 
-1. 楼层顺序：`二层 -> 三层 -> 四层`
-2. 时段顺序：`slot 1 -> slot 2`
-3. 时间字符串次序（同楼层同 slot 时）
+- 支持 `DATA_DIR` 环境变量（用于 Zeabur Volume 挂载目录）
+- 支持 `ALLOWED_ORIGINS` 环境变量（给 `github.io` 开 CORS）
+- 数据文件：
+  - `${DATA_DIR}/schedule.json`
+  - `${DATA_DIR}/change_logs.json`
+  - `${DATA_DIR}/schedule_data.js`
 
-`slot` 规则：
+API：
 
-- 有 `slot` 时直接使用
-- 缺失 `slot` 时按时间推断：
-  - 含 `19:00` 视为 `slot=2`
-  - 其他默认 `slot=1`
+- `GET /api/health`
+- `GET /api/schedule`
+- `POST /api/schedule`
+- `GET /api/change-logs`
+- `POST /api/change-logs`
+- `DELETE /api/change-logs`
 
-这样可保证：
+## 前端改造点
 
-- 前端显示顺序稳定
-- 交换时按 `date + floor + slot` 能准确定位
+前端配置文件：`config.js`
 
-### 2) 交换持久化
+- `CONFIG.API.BASE_URL`：后端地址
+- 推荐在 GitHub Pages 场景设置为你的 Zeabur 地址，如：
+  - `https://your-backend.zeabur.app`
 
-交换/移动后会：
+前端逻辑文件：`script.js`
 
-1. 更新内存中的排班数据
-2. 记录变更日志到后端
-3. 将完整排班写回后端 `data/schedule.json`
+- 所有 API 调用改为基于 `CONFIG.API.BASE_URL`
+- API 不可用时，自动降级到本地缓存模式
 
-因此刷新页面后数据仍保留。
+## 每月文件夹上传流程（保留历史）
 
-## 后端接口
+新增脚本：`tools/push_month_folder.py`
 
-后端文件：`server.js`（Node 原生 `http`，无额外依赖）
+作用：
 
-- `GET /api/schedule`：读取排班
-- `POST /api/schedule`：保存排班
-- `GET /api/change-logs`：读取交换日志
-- `POST /api/change-logs`：新增日志
-- `DELETE /api/change-logs`：清空日志
+1. 读取你每个月的文件夹（可包含一个或多个 `.xlsx`）
+2. 解析为日程数据（例如 `3.02-3.15.xlsx`）
+3. 先从后端拉取当前全量历史
+4. 只覆盖本次上传涉及日期
+5. 回写后端，历史月份保留
 
-数据文件：
-
-- `data/schedule.json`：排班主数据
-- `data/change_logs.json`：交换日志（自动创建）
-
-## 运行方式
-
-在项目根目录执行：
+依赖：
 
 ```bash
+pip install -r tools/requirements.txt
+```
+
+示例命令（从今年 3 月开始）：
+
+```bash
+python tools/push_month_folder.py --folder "E:\\duty-schedule-website\\monthly-data\\2026-03" --api "https://your-backend.zeabur.app" --year 2026
+```
+
+建议每个月单独建一个目录（例如 `monthly-data/2026-03/`），目录内只放当月 `.xlsx`，避免误导入其他月份文件。
+
+## Zeabur 部署配置
+
+已添加 `zbpack.json`：
+
+- `build_command`: `npm install`
+- `start_command`: `npm run start`
+
+部署后建议配置环境变量：
+
+- `DATA_DIR=/data`（示例，需与你挂载卷路径一致）
+- `ALLOWED_ORIGINS=https://<你的用户名>.github.io,https://<你的自定义前端域名>`
+
+## 数据不进 GitHub
+
+`.gitignore` 已加入：
+
+- `data/schedule.json`
+- `data/change_logs.json`
+- `data/schedule_data.js`
+- `data/monthly/`
+- `monthly-data/`
+- `*.xlsx`
+
+注意：如果这些文件之前已经被 Git 跟踪，需要执行一次取消跟踪（保留本地文件）：
+
+```bash
+git rm --cached data/schedule.json data/change_logs.json data/schedule_data.js
+git rm --cached *.xlsx
+```
+
+## 本地运行
+
+```bash
+npm install
 npm start
 ```
 
-启动后访问：
-
-```text
-http://localhost:3000
-```
-
-说明：
-
-- 推荐通过 `npm start` 启动（可用后端持久化，刷新不丢）。
-- 也支持直接打开 `index.html`（离线降级模式）：会读取 `data/schedule_data.js`，并使用浏览器本地存储保存交换结果与日志。
-
-## 主要文件
-
-- `server.js`：后端与静态文件服务
-- `script.js`：前端数据加载、排序、交换、日志界面
-- `index.html` / `styles.css`：页面结构与样式
-- `data/schedule.json`：值班数据
-- `data/change_logs.json`：交换日志数据（运行后生成）
+访问：`http://localhost:3000`

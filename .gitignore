@@ -31,3 +31,13 @@ node_modules/
 # 忽略操作系统文件
 .DS_Store
 Thumbs.db
+
+# 值班敏感数据（不上传 GitHub）
+data/schedule.json
+data/change_logs.json
+data/schedule_data.js
+data/monthly/
+monthly-data/
+
+# 每月排班原始文件
+*.xlsx

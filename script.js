@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', function() {
     let changeLogsCache = [];
     let apiAvailable = false;
 
+    const apiBaseUrl = String((CONFIG.API && CONFIG.API.BASE_URL) || '')
+        .trim()
+        .replace(/\/+$/, '');
     const API_ENDPOINTS = {
         schedule: '/api/schedule',
         changeLogs: '/api/change-logs'
@@ -18,6 +21,10 @@ document.addEventListener('DOMContentLoaded', function() {
         schedule: 'scheduleData',
         changeLogs: 'changeLogs'
     };
+
+    function buildApiUrl(pathname) {
+        return apiBaseUrl ? `${apiBaseUrl}${pathname}` : pathname;
+    }
 
     function getTodayDateStr() {
         const now = new Date();
@@ -81,7 +88,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const normalized = processScheduleData(scheduleData);
         if (apiAvailable) {
             try {
-                const response = await fetch(API_ENDPOINTS.schedule, {
+                const response = await fetch(buildApiUrl(API_ENDPOINTS.schedule), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ schedule: normalized })
@@ -118,7 +125,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     async function loadFromApi() {
-        const response = await fetch(`${API_ENDPOINTS.schedule}?_t=${Date.now()}`);
+        const response = await fetch(`${buildApiUrl(API_ENDPOINTS.schedule)}?_t=${Date.now()}`);
         if (!response.ok) {
             throw new Error(`HTTP错误! 状态: ${response.status}`);
         }
@@ -1352,7 +1359,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (apiAvailable) {
             try {
-                const response = await fetch(API_ENDPOINTS.changeLogs, {
+                const response = await fetch(buildApiUrl(API_ENDPOINTS.changeLogs), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ log: changeLog })
@@ -1394,7 +1401,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         try {
-            const response = await fetch(`${API_ENDPOINTS.changeLogs}?_t=${Date.now()}`);
+            const response = await fetch(`${buildApiUrl(API_ENDPOINTS.changeLogs)}?_t=${Date.now()}`);
             if (!response.ok) {
                 throw new Error(`HTTP错误! 状态: ${response.status}`);
             }
@@ -1574,7 +1581,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             if (apiAvailable) {
-                const response = await fetch(API_ENDPOINTS.changeLogs, { method: 'DELETE' });
+                const response = await fetch(buildApiUrl(API_ENDPOINTS.changeLogs), { method: 'DELETE' });
                 if (!response.ok) {
                     throw new Error(`HTTP错误! 状态: ${response.status}`);
                 }
